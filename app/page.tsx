@@ -859,7 +859,7 @@ export default function HomePage() {
                               </p>
                             </div>
 
-                            <div className="glass-card rounded-xl p-3">
+                            {/* <div className="glass-card rounded-xl p-3">
                               <p className="text-[11px] font-bold uppercase text-slate-600">
                                 Trip Duration
                               </p>
@@ -872,7 +872,7 @@ export default function HomePage() {
                                   ? "s"
                                   : ""}
                               </p>
-                            </div>
+                            </div> */}
 
                             <div className="glass-card rounded-xl p-3">
                               <p className="text-[11px] font-bold uppercase text-slate-600">
@@ -889,7 +889,7 @@ export default function HomePage() {
                               </p>
                             </div>
 
-                            <div className="glass-card rounded-xl p-3">
+                            {/* <div className="glass-card rounded-xl p-3">
                               <p className="text-[11px] font-bold uppercase text-slate-600">
                                 Toll Plazas
                               </p>
@@ -900,7 +900,7 @@ export default function HomePage() {
                                     .plazas
                                 }
                               </p>
-                            </div>
+                            </div> */}
                           </div>
 
                           {/* Export */}
