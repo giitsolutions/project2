@@ -21,6 +21,10 @@ interface ResolvedLocation {
   lng?: number;
   resolved_address?: string;
   provenance: Provenance;
+  ptpk: {
+  payload: number;
+  capacity: number;
+};
   name_provenance?: Provenance;
 }
 
@@ -45,6 +49,10 @@ export interface CalculationRequest {
 export interface CalculationResponse {
   total: number;
   subtotal: number;
+  ptpk: {
+    payload: number;
+    capacity: number;
+  };
   breakdown: unknown[];
   contributions: unknown[];
   meta: {

@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-Ground-up refactor of the Zero-Based Costing (ZBC) freight calculator into an
+Ground-up refactor of the PriceMyTrip (ZBC) freight calculator into an
 explicit **Fixed + Variable + Margin** model with itemized, real-data-sourced
 truck economics and a redesigned tabbed UI, per the PRD at
 `docs/superpowers/specs/2026-07-02-zbc-refactor-prd.md`. Work happens entirely

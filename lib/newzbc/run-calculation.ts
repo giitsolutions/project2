@@ -176,6 +176,7 @@ export async function runCalculation(req: MultiStopCalculationRequest): Promise<
   warnIfNotApi(warnings, "Diesel", fuel.provenance);
 
   const payload = payloadTons ?? profile.payload_tons;
+  const capacity = req.capacityTons;
   const days = tripDays(totalDistance, config.avg_speed_kmh);
 
   const model = modelId ? getTruckModel(modelId) : null;
@@ -242,6 +243,15 @@ export async function runCalculation(req: MultiStopCalculationRequest): Promise<
     excluded_heads,
   });
 
+  const payloadPtpk =
+  totalDistance > 0 && payload > 0
+    ? result.total_inr / totalDistance / payload
+    : 0;
+
+const capacityPtpk =
+  totalDistance > 0 && capacity > 0
+    ? result.total_inr / totalDistance / capacity
+    : 0;
   const contributions = validateContributions(result);
   const costHeadProvenance = buildCostHeadProvenance({
     toll: combinedToll.provenance,
@@ -251,6 +261,10 @@ export async function runCalculation(req: MultiStopCalculationRequest): Promise<
   return {
     total: result.total_inr,
     subtotal: result.subtotal_inr,
+    ptpk: {
+  payload: payloadPtpk,
+  capacity: capacityPtpk,
+},
     breakdown: result.lines.map((line) => ({
       ...line,
       pct:

@@ -1,4 +1,4 @@
-# Zero Based Costing Calculator — How It Works
+# PriceMyTrip — How It Works
 
 ## The Big Picture
 

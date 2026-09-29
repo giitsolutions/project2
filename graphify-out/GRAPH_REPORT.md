@@ -143,7 +143,7 @@ Nodes (13): buildStateMap(), CoreFuelResponse, CoreStateEntry, FuelPriceResult, 
 
 ### Community 14 - "Truck Config & Documentation"
 Cohesion: 0.18
-Nodes (11): Config README, getTruckProfile(), getTruckRatesConfig(), Zero Based Costing README, Zero-Based Costing Methodology, Truck Rates Config, calculateZBC(), ZBC Calculate Tests (+3 more)
+Nodes (11): Config README, getTruckProfile(), getTruckRatesConfig(), Zero Based Costing README, PriceMyTrip Methodology, Truck Rates Config, calculateZBC(), ZBC Calculate Tests (+3 more)
 
 ### Community 15 - "ESLint Linting Config"
 Cohesion: 0.40

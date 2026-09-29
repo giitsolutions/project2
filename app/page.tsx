@@ -1,4 +1,3 @@
-
 "use client";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
@@ -12,8 +11,13 @@ import {
   TripForm,
   type CalculateRequest,
 } from "@/components/TripForm";
-import { downloadSingleTripExcel } from "@/lib/export/excel";
+import { getSingleTripExcelFile } from "@/lib/export/excel";
+import { getReportPdfFile } from "@/lib/export/pdf";
 import { generateMethodologyMd } from "@/lib/export/methodology";
+import {
+  ReportEmailModal,
+  type PendingReport,
+} from "@/components/ReportEmailModal";
 import { ProvenanceDrawer } from "@/components/ProvenanceDrawer";
 import { ConfigurationTab } from "@/components/ConfigurationTab";
 import type {
@@ -35,6 +39,10 @@ interface ProvenanceInfo {
 interface CalculateResponse {
   total: number;
   subtotal: number;
+  ptpk: {
+    payload: number;
+    capacity: number;
+  };
   breakdown: BreakdownRow[];
   contributions: ContributionCheck[];
   meta: {
@@ -115,6 +123,10 @@ export default function HomePage() {
   const [lastRequest, setLastRequest] =
     useState<CalculateRequest | null>(null);
 
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [pendingReport, setPendingReport] =
+    useState<PendingReport | null>(null);
+
   const [tab, setTab] = useState<"single" | "batch">("single");
 
   const [batchResults, setBatchResults] =
@@ -122,9 +134,7 @@ export default function HomePage() {
 
   const [formMinimized, setFormMinimized] = useState(false);
 
-  const [activeResultTab, setActiveResultTab] = useState<
-    "configuration" | "breakdown" | "route"
-  >("breakdown");
+  const [activeResultTab, setActiveResultTab] = useState<"configuration" | "breakdown" | "route">("breakdown");
 
   const [configOverrides, setConfigOverrides] =
     useState<RateOverrides>({});
@@ -136,6 +146,9 @@ export default function HomePage() {
     useState<CalculateResponse | null>(null);
 
   const skipNextRecomputeRef = useRef(false);
+  // Wraps the on-screen "Cost Breakdown" card (totals, allocation bar, pie
+  // chart, detailed table) so the PDF export can capture it as an image.
+  const reportRef = useRef<HTMLDivElement>(null);
 
   const truckRates = truckRatesJson.trucks;
 
@@ -222,6 +235,80 @@ export default function HomePage() {
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configOverrides, excludedHeads]);
+
+  // Creates the exact result structure expected by the Excel exporter.
+  function buildExportResult() {
+    if (!result) return null;
+
+    return {
+      ...result,
+
+      meta: {
+        ...result.meta,
+
+        origin: {
+          name: result.meta.origin.name,
+        },
+
+        destination: {
+          name: result.meta.destination.name,
+        },
+      },
+    };
+  }
+
+  // Trip summary that is sent along with the report and printed in the email.
+  function buildTripDetails(): PendingReport["tripDetails"] {
+    return {
+      truckId: lastRequest?.truckId,
+      modelId: lastRequest?.modelId,
+      tripType: lastRequest?.tripType,
+      payloadTons: lastRequest?.payloadTons,
+      capacityTons: lastRequest?.capacityTons,
+      routes: lastRequest?.routes ?? [],
+      origin: result?.meta.origin.name,
+      destination: result?.meta.destination.name,
+      distanceKm: result?.meta.distance_km,
+      tripDays: result?.meta.trip_days,
+      totalCost: result?.total,
+      subtotal: result?.subtotal,
+      ptpkPayload: result?.ptpk.payload,
+      ptpkCapacity: result?.ptpk.capacity,
+      dieselPrice: result?.meta.fuel.price_inr,
+      dieselState: result?.meta.fuel.state,
+      tollPlazas: result?.meta.toll.plazas,
+    };
+  }
+
+  // The report is only emailed, never downloaded to the user's computer.
+  function handleDownloadExcel() {
+    const exportResult = buildExportResult();
+    if (!exportResult) return;
+
+    const file = getSingleTripExcelFile(exportResult, {
+      truckId: lastRequest?.truckId ?? "",
+    });
+
+    setPendingReport({ file, type: "excel", tripDetails: buildTripDetails() });
+    setEmailModalOpen(true);
+  }
+
+  async function handleDownloadPdf() {
+    const node = reportRef.current;
+    if (!node) {
+      console.error("PriceMyTrip PDF error: report element not found.");
+      return;
+    }
+
+    try {
+      const file = await getReportPdfFile(node);
+      setPendingReport({ file, type: "pdf", tripDetails: buildTripDetails() });
+      setEmailModalOpen(true);
+    } catch (err) {
+      console.error("PriceMyTrip PDF generation error:", err);
+      setError("Unable to generate the PDF report. Please try again.");
+    }
+  }
 
   function downloadMethodology() {
     const md = generateMethodologyMd();
@@ -714,7 +801,7 @@ export default function HomePage() {
                     {/* MAIN RESULT CARD */}
                     {/* ================================================= */}
 
-                    <div className="glass-panel rounded-2xl p-5 sm:p-7">
+                    <div className="glass-panel rounded-2xl p-5 sm:p-7" ref={reportRef}>
                       {/* Header */}
 
                       <div className="flex flex-col justify-between gap-4 border-b border-white/30 pb-5 sm:flex-row sm:items-center">
@@ -847,19 +934,57 @@ export default function HomePage() {
 
                           {/* Result meta */}
 
-                          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                            <div className="glass-card rounded-xl p-3">
+                       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+  <div className="glass-card rounded-xl p-3">
+    <p className="text-[11px] font-bold uppercase text-slate-600">
+      Distance
+    </p>
+
+    <p className="mt-1 text-lg font-extrabold text-slate-900">
+      {result.meta.distance_km} km
+    </p>
+  </div>
+
+  <div className="glass-card rounded-xl p-3">
+    <p className="text-[11px] font-bold uppercase text-slate-600">
+      Diesel
+    </p>
+
+    <p className="mt-1 text-lg font-extrabold text-slate-900">
+      ₹{result.meta.fuel.price_inr}/L
+    </p>
+  </div>
+
+  {/* PTPK */}
+  <div className="glass-card rounded-xl p-3">
+    <p className="text-[11px] font-bold uppercase text-slate-600">
+      Price Per Ton Per Kilometer
+    </p>
+
+    <div className="mt-1 space-y-0.5">
+      <p className="text-sm font-extrabold text-slate-900">
+        Payload: ₹{result.ptpk.payload.toFixed(2)}
+      </p>
+
+      <p className="text-sm font-extrabold text-slate-900">
+        Capacity: ₹{result.ptpk.capacity.toFixed(2)}
+      </p>
+    </div>
+  </div>
+       {/* <div className="glass-card rounded-xl p-3">
                               <p className="text-[11px] font-bold uppercase text-slate-600">
-                                Distance
+                                Toll Plazas
                               </p>
 
                               <p className="mt-1 text-lg font-extrabold text-slate-900">
-                                {result.meta.distance_km}{" "}
-                                km
+                                {
+                                  result.meta.toll
+                                    .plazas
+                                }
                               </p>
-                            </div>
-
-                            {/* <div className="glass-card rounded-xl p-3">
+                            </div> */}
+                                 
+                             {/* <div className="glass-card rounded-xl p-3">
                               <p className="text-[11px] font-bold uppercase text-slate-600">
                                 Trip Duration
                               </p>
@@ -873,78 +998,25 @@ export default function HomePage() {
                                   : ""}
                               </p>
                             </div> */}
-
-                            <div className="glass-card rounded-xl p-3">
-                              <p className="text-[11px] font-bold uppercase text-slate-600">
-                                Diesel
-                              </p>
-
-                              <p className="mt-1 text-lg font-extrabold text-slate-900">
-                                ₹
-                                {
-                                  result.meta.fuel
-                                    .price_inr
-                                }
-                                /L
-                              </p>
-                            </div>
-
-                            {/* <div className="glass-card rounded-xl p-3">
-                              <p className="text-[11px] font-bold uppercase text-slate-600">
-                                Toll Plazas
-                              </p>
-
-                              <p className="mt-1 text-lg font-extrabold text-slate-900">
-                                {
-                                  result.meta.toll
-                                    .plazas
-                                }
-                              </p>
-                            </div> */}
-                          </div>
+                    </div>
 
                           {/* Export */}
 
-                          <div
+                      <div
                             className="flex flex-wrap gap-2"
                             data-print="hide"
                           >
                             <button
-                              onClick={() =>
-                                downloadSingleTripExcel(
-                                  {
-                                    ...result,
-                                    meta: {
-                                      ...result.meta,
-                                      origin: {
-                                        name: result.meta
-                                          .origin
-                                          .name,
-                                      },
-                                      destination: {
-                                        name: result.meta
-                                          .destination
-                                          .name,
-                                      },
-                                    },
-                                  },
-                                  {
-                                    truckId:
-                                      lastRequest?.truckId ??
-                                      "",
-                                  }
-                                )
-                              }
+                              onClick={handleDownloadExcel}
                               className="rounded-xl border border-white/70 bg-white/75 px-4 py-2 text-xs font-bold text-slate-800 shadow-sm transition-all hover:bg-white"
                             >
                               Download Excel
                             </button>
-
                             <button
-                              onClick={() => window.print()}
+                              onClick={handleDownloadPdf}
                               className="rounded-xl border border-white/70 bg-white/75 px-4 py-2 text-xs font-bold text-slate-800 shadow-sm transition-all hover:bg-white"
                             >
-                              Print / PDF
+                              Download PDF
                             </button>
                           </div>
 
@@ -1112,6 +1184,12 @@ export default function HomePage() {
           onClose={() => setProvenanceResult(null)}
           result={provenanceResult}
         />
+
+        <ReportEmailModal
+          open={emailModalOpen}
+          report={pendingReport}
+          onClose={() => setEmailModalOpen(false)}
+        />
     
     <footer className="mt-12 border-t border-black/10 py-6">
   <div className="mx-auto flex max-w-7xl flex-col items-center justify-center gap-2 px-6 text-center">
@@ -1133,4 +1211,3 @@ export default function HomePage() {
     </>
   );
 }
-

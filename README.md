@@ -1,4 +1,4 @@
-# Zero Based Costing Calculator
+# PriceMyTrip
 
 Web app to estimate Indian freight trip costs, built on an explicit
 **Fixed + Variable + Margin** model: 21 itemized cost heads (driver/helper
