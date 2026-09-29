@@ -76,6 +76,7 @@ const bodySchema = z.object({
     message: "tripType must be either 'one-way' or 'two-way'",
   }),
   payloadTons: z.number().positive().optional(),
+  capacityTons: z.number().positive(),
   overrides: overridesSchema,
   excluded_heads: z.array(z.enum(COST_HEAD_IDS)).optional(),
 });

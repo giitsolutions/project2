@@ -1,4 +1,4 @@
-# PRD — Zero-Based Costing Refactor & Route Optimization
+# PRD — PriceMyTrip Refactor & Route Optimization
 
 **Date:** 2026-07-02
 **Status:** Draft for approval
@@ -9,7 +9,7 @@
 
 ## 1. Purpose & Background
 
-The current Zero-Based Costing (ZBC) tool estimates freight trip cost across 10 cost heads
+The current PriceMyTrip (ZBC) tool estimates freight trip cost across 10 cost heads
 for a single truck/route, plus a batch mode for up to 200 rows. Review against the reference
 methodology (`data/Project Unnati_ZBC_Costing_Feb 15_v1.0 1.xlsx`) and industry ZBC practice
 surfaced three problems:

@@ -5,6 +5,7 @@ export interface MultiStopCalculationRequest {
   modelId?: string;
   routes: string[]; // ordered waypoints: origin, ...stops, destination. Minimum length 2.
   tripType?: string;
+  capacityTons: number;
   payloadTons?: number;
   overrides?: RateOverrides;
   /** Cost head IDs to fully omit from this calculation (Configuration tab toggles). */

@@ -44,7 +44,7 @@ interface BreakdownRow {
   pct: number;
 }
 
-interface CalculationResult {
+export interface CalculationResult {
   total: number;
   subtotal: number;
   breakdown: BreakdownRow[];
@@ -68,7 +68,7 @@ export interface BatchRowResult extends CalculationResult {
   truckLabel?: string;
 }
 
-function buildRow(
+export function buildRow(
   result: CalculationResult,
   extra: Record<string, string | number> = {}
 ): Record<string, string | number> {
@@ -149,16 +149,43 @@ function styleSheet(ws: XLSX.WorkSheet, headers: string[]): void {
   ws["!rows"] = [{ hpt: 24 }]; // taller header row
 }
 
-export function downloadSingleTripExcel(
+// ── Excel MIME type, shared by the download and email-attachment paths ──────
+export const EXCEL_MIME_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+function buildSingleTripWorkbook(
   result: CalculationResult,
   meta: { truckId: string }
-): void {
+): XLSX.WorkBook {
   const row = buildRow(result, { "Truck ID": meta.truckId });
   const ws = XLSX.utils.json_to_sheet([row]);
   styleSheet(ws, Object.keys(row));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Trip Cost");
-  XLSX.writeFile(wb, "zbc-trip.xlsx");
+  return wb;
+}
+
+export function downloadSingleTripExcel(
+  result: CalculationResult,
+  meta: { truckId: string }
+): void {
+  const wb = buildSingleTripWorkbook(result, meta);
+  XLSX.writeFile(wb, "PriceMyTrip.xlsx");
+}
+
+// Builds the same single-trip workbook but returns it as an in-memory File
+// instead of triggering a browser download. Used when the report needs to be
+// attached to an outgoing email as well as (or instead of) downloaded.
+export function getSingleTripExcelFile(
+  result: CalculationResult,
+  meta: { truckId: string }
+): File {
+  const wb = buildSingleTripWorkbook(result, meta);
+  const arrayBuffer = XLSX.write(wb, {
+    bookType: "xlsx",
+    type: "array",
+  }) as ArrayBuffer;
+  return new File([arrayBuffer], "PriceMyTrip.xlsx", { type: EXCEL_MIME_TYPE });
 }
 
 export function downloadBatchExcel(results: BatchRowResult[]): void {
@@ -187,5 +214,5 @@ export function downloadBatchExcel(results: BatchRowResult[]): void {
   styleSheet(ws, Object.keys(reordered[0] ?? {}));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Batch Trip Cost");
-  XLSX.writeFile(wb, "zbc-batch.xlsx");
+  XLSX.writeFile(wb, "PriceMyTrip.xlsx");
 }

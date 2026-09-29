@@ -3519,7 +3519,7 @@
       "source_url": null,
       "captured_at": null,
       "author": null,
-      "contributor": "Zero-based costing validates each cost head falls within an expected percentage band of total trip cost, flagging low/high anomalies against freight industry benchmarks.",
+      "contributor": "PriceMyTrip validates each cost head falls within an expected percentage band of total trip cost, flagging low/high anomalies against freight industry benchmarks.",
       "id": "concept_contribution_benchmark",
       "community": 6,
       "norm_label": "contribution benchmark (% band validation per cost head)"
@@ -4216,7 +4216,7 @@
       "norm_label": "graceful degradation / fallback chain rationale"
     },
     {
-      "label": "Zero-Based Costing Methodology",
+      "label": "PriceMyTrip",
       "file_type": "rationale",
       "source_file": "README.md",
       "source_location": null,
@@ -4227,7 +4227,7 @@
       "rationale": "Freight costs are decomposed into 10 independent cost heads (fuel, driver, vehicle, toll, maintenance, loading, idle, overhead, risk, empty_return), each calculated from first principles rather than quoting market rates. This allows fleet operators to audit each component and identify where actual costs deviate from benchmarks.",
       "id": "rationale_zero_based_costing",
       "community": 14,
-      "norm_label": "zero-based costing methodology"
+      "norm_label": "PriceMyTrip"
     },
     {
       "label": "The Core India Fuel Watch API",
