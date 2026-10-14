@@ -2,6 +2,7 @@
   "name": "pricemytrip",
   "version": "0.1.0",
   "private": true,
+  "main": "next.config.mjs",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
