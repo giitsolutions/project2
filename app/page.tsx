@@ -28,6 +28,13 @@ import type {
 import type { BreakdownRow } from "@/components/CostBreakdownTable";
 import type { BatchRowResult } from "@/lib/export/excel";
 import { RouteMap } from "@/components/RouteMap";
+import { useAuth } from "@/components/AuthProvider";
+import { AuthModal, type AuthMode } from "@/components/AuthModal";
+import { AuthControls } from "@/components/AuthControls";
+import { SaveTripControl } from "@/components/SaveTripControl";
+import { SavedTripsPanel } from "@/components/SavedTripsPanel";
+import type { SavedTrip, SavedTripInput } from "@/lib/trips/schema";
+import { tripSignature } from "@/lib/trips/signature";
 
 interface ProvenanceInfo {
   kind: string;
@@ -48,7 +55,6 @@ interface CalculateResponse {
   meta: {
     trip_days: number;
     distance_km: number;
-
     origin: {
       name: string;
       state: string;
@@ -57,7 +63,6 @@ interface CalculateResponse {
       provenance?: ProvenanceInfo;
       name_provenance?: ProvenanceInfo;
     };
-
     destination: {
       name: string;
       state: string;
@@ -66,7 +71,6 @@ interface CalculateResponse {
       provenance?: ProvenanceInfo;
       name_provenance?: ProvenanceInfo;
     };
-
     inputs?: {
       geocode_origin?: ProvenanceInfo;
       geocode_origin_name?: ProvenanceInfo;
@@ -76,19 +80,15 @@ interface CalculateResponse {
       fuel?: ProvenanceInfo;
       toll?: ProvenanceInfo;
     };
-
     cost_heads?: Record<string, ProvenanceInfo>;
-
     toll: {
       plazas: number;
       highway?: string;
     };
-
     fuel: {
       price_inr: number;
       state: string;
     };
-
     truck?: {
       truck_id: string;
       truck_label: string;
@@ -98,7 +98,6 @@ interface CalculateResponse {
       provenance: ProvenanceInfo;
     };
   };
-
   error?: string;
   suggestions?: string[];
 }
@@ -120,49 +119,62 @@ export default function HomePage() {
   const [showContribution, setShowContribution] = useState(true);
   const [showChart, setShowChart] = useState(true);
 
-  const [lastRequest, setLastRequest] =
-    useState<CalculateRequest | null>(null);
-
+  const [lastRequest, setLastRequest] = useState<CalculateRequest | null>(null);
   const [emailModalOpen, setEmailModalOpen] = useState(false);
-  const [pendingReport, setPendingReport] =
-    useState<PendingReport | null>(null);
-
+  const [pendingReport, setPendingReport] = useState<PendingReport | null>(null);
   const [tab, setTab] = useState<"single" | "batch">("single");
-
-  const [batchResults, setBatchResults] =
-    useState<BatchRowResult[]>([]);
-
+  const [batchResults, setBatchResults] = useState<BatchRowResult[]>([]);
   const [formMinimized, setFormMinimized] = useState(false);
-
-  const [activeResultTab, setActiveResultTab] = useState<"configuration" | "breakdown" | "route">("breakdown");
-
-  const [configOverrides, setConfigOverrides] =
-    useState<RateOverrides>({});
-
-  const [excludedHeads, setExcludedHeads] =
-    useState<CostHeadId[]>([]);
-
-  const [provenanceResult, setProvenanceResult] =
-    useState<CalculateResponse | null>(null);
+  const [activeResultTab, setActiveResultTab] = useState<"configuration" | "breakdown" | "route" | "saved">("breakdown");
+  const [configOverrides, setConfigOverrides] = useState<RateOverrides>({});
+  const [excludedHeads, setExcludedHeads] = useState<CostHeadId[]>([]);
+  const [provenanceResult, setProvenanceResult] = useState<CalculateResponse | null>(null);
 
   const skipNextRecomputeRef = useRef(false);
-  // Wraps the on-screen "Cost Breakdown" card (totals, allocation bar, pie
-  // chart, detailed table) so the PDF export can capture it as an image.
   const reportRef = useRef<HTMLDivElement>(null);
-
   const truckRates = truckRatesJson.trucks;
+
+  const { user, ready: authReady } = useAuth();
+  const [authModal, setAuthModal] = useState<AuthMode | null>(null);
+  const [savedSignature, setSavedSignature] = useState<string | null>(null);
+  const showSaved = user !== null && activeResultTab === "saved";
+
+  const resultTabs: ("configuration" | "breakdown" | "route" | "saved")[] = [
+    "configuration",
+    "breakdown",
+    "route",
+    ...(user ? (["saved"] as const) : []),
+  ];
+
+  const currentTripRequest = lastRequest
+    ? {
+        ...lastRequest,
+        overrides: { ...lastRequest.overrides, ...configOverrides },
+        excluded_heads: excludedHeads,
+      }
+    : null;
+
+  const isCurrentTripSaved =
+    currentTripRequest !== null &&
+    savedSignature !== null &&
+    savedSignature === tripSignature(currentTripRequest);
+
+  useEffect(() => {
+    if (authReady && !user && activeResultTab === "saved") {
+      setActiveResultTab("breakdown");
+    }
+  }, [authReady, user, activeResultTab]);
 
   async function handleCalculate(
     req: CalculateRequest,
-    opts?: { silent?: boolean }
-  ) {
+    opts?: { silent?: boolean; restore?: boolean }
+  ): Promise<boolean> {
     if (!opts?.silent) {
       setLoading(true);
       setResult(null);
-
-      setConfigOverrides({});
-      setExcludedHeads([]);
-
+      if (!opts?.restore) setSavedSignature(null);
+      setConfigOverrides(opts?.restore ? (req.overrides ?? {}) : {});
+      setExcludedHeads(opts?.restore ? (req.excluded_heads ?? []) : []);
       skipNextRecomputeRef.current = true;
     }
 
@@ -173,9 +185,7 @@ export default function HomePage() {
     try {
       const res = await fetch("/api/newcalculate", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(req),
       });
 
@@ -186,78 +196,51 @@ export default function HomePage() {
 
       if (!res.ok) {
         setError(data.error ?? "Calculation failed");
-
-        if (data.suggestions?.length) {
-          setSuggestions(data.suggestions);
-        }
-
-        return;
+        if (data.suggestions?.length) setSuggestions(data.suggestions);
+        return false;
       }
 
       setResult(data);
-
-      if (!opts?.silent) {
-        setFormMinimized(true);
-      }
+      if (!opts?.silent) setFormMinimized(true);
+      return true;
     } catch {
       setError("Network error. Please try again.");
+      return false;
     } finally {
-      if (!opts?.silent) {
-        setLoading(false);
-      }
+      if (!opts?.silent) setLoading(false);
     }
   }
 
   useEffect(() => {
     if (!lastRequest) return;
-
     if (skipNextRecomputeRef.current) {
       skipNextRecomputeRef.current = false;
       return;
     }
-
     const handle = setTimeout(() => {
       const merged: CalculateRequest = {
         ...lastRequest,
-        overrides: {
-          ...lastRequest.overrides,
-          ...configOverrides,
-        },
+        overrides: { ...lastRequest.overrides, ...configOverrides },
         excluded_heads: excludedHeads,
       };
-
-      handleCalculate(merged, {
-        silent: true,
-      });
+      handleCalculate(merged, { silent: true });
     }, 400);
 
     return () => clearTimeout(handle);
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configOverrides, excludedHeads]);
 
-  // Creates the exact result structure expected by the Excel exporter.
   function buildExportResult() {
     if (!result) return null;
-
     return {
       ...result,
-
       meta: {
         ...result.meta,
-
-        origin: {
-          name: result.meta.origin.name,
-        },
-
-        destination: {
-          name: result.meta.destination.name,
-        },
+        origin: { name: result.meta.origin.name },
+        destination: { name: result.meta.destination.name },
       },
     };
   }
 
-  // Trip summary that is sent along with the report and printed in the email.
   function buildTripDetails(): PendingReport["tripDetails"] {
     return {
       truckId: lastRequest?.truckId,
@@ -280,933 +263,527 @@ export default function HomePage() {
     };
   }
 
-  // The report is only emailed, never downloaded to the user's computer.
   function handleDownloadExcel() {
     const exportResult = buildExportResult();
     if (!exportResult) return;
-
     const file = getSingleTripExcelFile(exportResult, {
       truckId: lastRequest?.truckId ?? "",
     });
-
     setPendingReport({ file, type: "excel", tripDetails: buildTripDetails() });
     setEmailModalOpen(true);
   }
 
   async function handleDownloadPdf() {
     const node = reportRef.current;
-    if (!node) {
-      console.error("PriceMyTrip PDF error: report element not found.");
-      return;
-    }
-
+    if (!node) return;
     try {
       const file = await getReportPdfFile(node);
       setPendingReport({ file, type: "pdf", tripDetails: buildTripDetails() });
       setEmailModalOpen(true);
     } catch (err) {
-      console.error("PriceMyTrip PDF generation error:", err);
       setError("Unable to generate the PDF report. Please try again.");
     }
   }
 
-  function downloadMethodology() {
-    const md = generateMethodologyMd();
+  async function handleSaveTrip(name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (!result || !currentTripRequest) return { ok: false, error: "Calculate a trip first" };
+    const body: SavedTripInput = {
+      name,
+      request: currentTripRequest as SavedTripInput["request"],
+      summary: {
+        origin: result.meta.origin.name,
+        destination: result.meta.destination.name,
+        distanceKm: result.meta.distance_km,
+        totalCost: result.total,
+        tripDays: result.meta.trip_days,
+        truckLabel: result.meta.truck?.truck_label,
+        modelLabel: result.meta.truck?.model_label,
+        ptpkPayload: result.ptpk.payload,
+      },
+    };
 
-    const blob = new Blob([md], {
-      type: "text/markdown",
-    });
-
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-
-    a.href = url;
-    a.download = "zbc-methodology.md";
-
-    a.click();
-
-    URL.revokeObjectURL(url);
+    try {
+      const res = await fetch("/api/trips", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, error: res.status === 401 ? "Your session expired. Please log in again." : (data.error ?? "Could not save this trip") };
+      }
+      setSavedSignature(tripSignature(currentTripRequest));
+      return { ok: true };
+    } catch {
+      return { ok: false, error: "Network error. Please try again." };
+    }
   }
+
+  async function handleOpenSavedTrip(trip: SavedTrip) {
+    setTab("single");
+    setActiveResultTab("breakdown");
+    const ok = await handleCalculate(trip.request as CalculateRequest, { restore: true });
+    if (ok) setSavedSignature(tripSignature(trip.request));
+  }
+
+  function openSavedTrips() {
+    setTab("single");
+    setActiveResultTab("saved");
+  }
+
+  const kpis = result
+    ? [
+        { label: "Distance", value: `${result.meta.distance_km} km`, card: "border-l-blue-500 bg-blue-50", text: "text-blue-700" },
+        { label: "Diesel", value: `₹${result.meta.fuel.price_inr}/L`, card: "border-l-amber-500 bg-amber-50", text: "text-amber-700" },
+        { label: "Price Per Ton Per Kilometer (Payload)", value: `₹${result.ptpk.payload.toFixed(2)}`, card: "border-l-emerald-500 bg-emerald-50", text: "text-emerald-700" },
+        { label: "Price Per Ton Per Kilometer (Capacity)", value: `₹${result.ptpk.capacity.toFixed(2)}`, card: "border-l-violet-500 bg-violet-50", text: "text-violet-700" },
+      ]
+    : [];
 
   return (
     <>
-      {/* ========================================================= */}
-      {/* GLOBAL STYLES */}
-      {/* ========================================================= */}
-
       <style jsx global>{`
         @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap");
 
         body {
           font-family: "Inter", sans-serif;
           -webkit-font-smoothing: antialiased;
+          background: linear-gradient(180deg, #e8eef9 0%, #f1f5f9 40%, #e9eef5 100%);
+          background-attachment: fixed;
         }
 
         .price-heading {
           font-family: "Plus Jakarta Sans", sans-serif;
         }
 
-        .glass-panel {
-          backdrop-filter: blur(20px) saturate(190%);
-          -webkit-backdrop-filter: blur(20px) saturate(190%);
-          background: rgba(255, 255, 255, 0.24);
-          border: 1px solid rgba(255, 255, 255, 0.45);
-          border-top: 1px solid rgba(255, 255, 255, 0.65);
-          border-left: 1px solid rgba(255, 255, 255, 0.6);
-          box-shadow:
-            0 20px 50px rgba(0, 0, 0, 0.15),
-            0 1px 3px rgba(255, 255, 255, 0.35) inset;
+        .standard-card {
+          background: #ffffff;
+          border: 1px solid #dbe3ee;
+          box-shadow: 0 10px 30px -12px rgba(15, 23, 42, 0.18);
         }
 
-        .glass-card {
-          background: rgba(255, 255, 255, 0.48);
-          backdrop-filter: blur(16px);
-          -webkit-backdrop-filter: blur(16px);
-          border: 1px solid rgba(255, 255, 255, 0.62);
-          box-shadow:
-            0 10px 30px rgba(15, 23, 42, 0.08),
-            inset 0 1px 2px rgba(255, 255, 255, 0.4);
+        .auth-zone > div,
+        .auth-zone > button,
+        .auth-zone button {
+          font-size: 13px;
+          font-weight: 600;
+          color: #ffffff;
+          background: rgba(255, 255, 255, 0.1);
+          border: 1px solid rgba(255, 255, 255, 0.22);
+          border-radius: 9999px;
+          padding: 8px 16px;
+          backdrop-filter: blur(6px);
+          box-shadow: none;
+          transition: all 0.2s ease;
         }
 
-        .glass-input-wrapper input,
-        .glass-input-wrapper select {
-          background: rgba(255, 255, 255, 0.48) !important;
-          border: 1px solid rgba(255, 255, 255, 0.65) !important;
-          backdrop-filter: blur(10px);
-          -webkit-backdrop-filter: blur(10px);
+        .auth-zone button:hover {
+          background: rgba(255, 255, 255, 0.2);
+          transform: translateY(-1px);
         }
 
-        .glass-input-wrapper input:focus,
-        .glass-input-wrapper select:focus {
-          background: rgba(255, 255, 255, 0.75) !important;
+        .auth-zone button:last-of-type {
+          background: #ffffff;
+          color: #1e3a8a;
+          border-color: #ffffff;
+        }
+
+        .auth-zone button:last-of-type:hover {
+          background: #dbeafe;
+        }
+
+        .saved-zone button {
+          transition: all 0.2s ease;
+        }
+
+        .saved-zone > div > :has(button),
+        .saved-zone article {
+          border: 1px solid #e2e8f0;
+          border-left: 4px solid #2563eb;
+          border-radius: 14px;
+          background: #ffffff;
+          box-shadow: 0 6px 18px -10px rgba(15, 23, 42, 0.25);
+          transition: box-shadow 0.2s ease, transform 0.2s ease;
+        }
+
+        .saved-zone > div > :has(button):hover,
+        .saved-zone article:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 16px 30px -14px rgba(37, 99, 235, 0.4);
+        }
+
+        .saved-zone button:last-of-type:not(:first-of-type) {
+          color: #b91c1c;
+          background: #fef2f2;
+          border: 1px solid #fca5a5;
+          border-radius: 8px;
+          padding: 6px 16px;
+          font-weight: 700;
+        }
+
+        .saved-zone button:last-of-type:not(:first-of-type):hover {
+          background: #dc2626;
+          border-color: #dc2626;
+          color: #ffffff;
+        }
+
+        .clean-input-wrapper input,
+        .clean-input-wrapper select {
+          background: #f8fafc !important;
+          border: 1px solid #cbd5e1 !important;
+          border-radius: 10px !important;
+          transition: all 0.2s ease;
+        }
+
+        .clean-input-wrapper input:focus,
+        .clean-input-wrapper select:focus {
+          background: #ffffff !important;
           border-color: #2563eb !important;
           outline: none !important;
-          box-shadow:
-            0 0 0 3px rgba(37, 99, 235, 0.2) !important;
+          box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12) !important;
+        }
+
+        .clean-input-wrapper button[type="submit"] {
+          background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+          box-shadow: 0 10px 20px -8px rgba(37, 99, 235, 0.6);
+          transition: all 0.2s ease;
+        }
+
+        .clean-input-wrapper button[type="submit"]:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 14px 24px -8px rgba(37, 99, 235, 0.7);
         }
 
         input::placeholder {
-          color: rgba(15, 23, 42, 0.55);
+          color: #94a3b8;
         }
-
-        @keyframes truckDriveBob {
-          0%,
-          100% {
-            transform: translateY(0) rotate(0deg);
-          }
-
-          30% {
-            transform: translateY(-3px) rotate(0.4deg);
-          }
-
-          60% {
-            transform: translateY(1px) rotate(-0.25deg);
-          }
-
-          85% {
-            transform: translateY(-1px) rotate(0.1deg);
-          }
-        }
-
-        @keyframes minimalRoadMove {
-          0% {
-            transform: translateX(0);
-          }
-
-          100% {
-            transform: translateX(-50%);
-          }
-        }
-
-        @keyframes windParticle {
-          0% {
-            transform: translateX(100px);
-            opacity: 0;
-          }
-
-          20% {
-            opacity: 0.6;
-          }
-
-          80% {
-            opacity: 0.6;
-          }
-
-          100% {
-            transform: translateX(-180px);
-            opacity: 0;
-          }
-        }
-
-        .truck-bob {
-          animation: truckDriveBob 1.8s ease-in-out infinite;
-        }
-
-        .road-dashes {
-          animation: minimalRoadMove 0.85s linear infinite;
-        }
-
-        .wind-1 {
-          animation: windParticle 1.4s
-            cubic-bezier(0.2, 0, 0.8, 1) infinite;
-        }
-
-        .wind-2 {
-          animation: windParticle 1.9s
-            cubic-bezier(0.3, 0, 0.7, 1) infinite 0.6s;
-        }
-
-        .wind-3 {
-          animation: windParticle 1.6s
-            cubic-bezier(0.25, 0, 0.75, 1) infinite 1.1s;
-        }
-
-  .truck-image {
-  object-fit: contain;
-}
       `}</style>
 
-      {/* ========================================================= */}
-      {/* PAGE */}
-      {/* ========================================================= */}
-
-      <main
-        className="min-h-screen text-slate-900"
-        style={{
-          background:
-            "linear-gradient(135deg, rgb(108,120,146) 0%, rgb(126,139,159) 35%, rgb(154,166,184) 65%, rgb(200,209,222) 100%)",
-        }}
-      >
-        {/* Ambient background */}
-
-        <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
-          <div className="absolute -top-[15%] -left-[10%] h-[55vw] w-[55vw] rounded-full bg-white/15 blur-3xl" />
-
-          <div className="absolute right-[10%] top-[20%] h-[50vw] w-[50vw] rounded-full bg-slate-400/20 blur-3xl" />
-
-          <div className="absolute -bottom-[20%] left-[25%] h-[60vw] w-[60vw] rounded-full bg-white/20 blur-3xl" />
-        </div>
-
-        <div className="relative z-10 mx-auto max-w-[1440px] px-5 py-7 md:px-8 lg:px-12 lg:py-9">
-          {/* ===================================================== */}
-          {/* HEADER */}
-          {/* ===================================================== */}
-
-          <header
-            className="flex flex-col gap-5 pb-8 sm:flex-row sm:items-center sm:justify-between"
-            data-print="hide"
-          >
+      <main className="flex min-h-screen flex-col text-slate-900">
+        <div className="relative overflow-hidden bg-gradient-to-br from-slate-950 via-slate-900 to-blue-900" data-print="hide">
+          <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-blue-500/20 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-32 left-1/3 h-72 w-72 rounded-full bg-indigo-500/20 blur-3xl" />
+          <header className="relative mx-auto flex max-w-[1440px] flex-col gap-5 px-5 py-6 sm:flex-row sm:items-center sm:justify-between md:px-8 lg:px-12">
             <div className="flex items-center gap-4 sm:gap-5">
-              {}
-<div className="flex h-16 w-24 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/60 bg-white/95 px-2 py-1 shadow-md">
-  <Image
-    src="/images/logo.png"
-    alt="ACG Logo"
-    width={100}
-    height={60}
-    className="h-full w-full object-contain"
-    priority
-  />
-</div>
-
-              <div className="hidden h-9 w-px bg-white/30 sm:block" />
-
+              <div className="flex h-16 w-24 flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white px-2 py-1 shadow-lg ring-4 ring-white/10">
+                <Image
+                  src="/images/logo.png"
+                  alt="ACG Logo"
+                  width={100}
+                  height={60}
+                  className="h-full w-full object-contain"
+                  priority
+                />
+              </div>
               <div>
-                <h1 className="price-heading flex items-center gap-2 text-2xl font-extrabold tracking-tight text-slate-900 drop-shadow-sm md:text-[28px]">
+                <h1 className="price-heading text-2xl font-extrabold tracking-tight text-white md:text-[30px]">
                   PriceMyTrip
                 </h1>
-
-                <p className="mt-0.5 text-[13px] font-medium text-slate-700 md:text-[14px]">
-                  Estimate freight trip cost across fixed, variable,
-                  and margin cost heads.
+                <p className="mt-0.5 text-[13px] font-medium text-blue-200 md:text-[14px]">
+                  Zero-Based Freight Trip Cost Calculator
                 </p>
               </div>
             </div>
-
-            {/* <button
-              onClick={downloadMethodology}
-              className="inline-flex items-center gap-2 self-start rounded-xl border border-white/80 bg-white/85 px-4 py-2.5 text-[13px] font-semibold text-slate-800 shadow-sm backdrop-blur-md transition-all hover:bg-white hover:shadow-md sm:self-center"
-            >
-              Download methodology
-
-              <span className="text-xs font-bold text-slate-600">
-                ↓
-              </span>
-            </button> */}
+            <div className="auth-zone flex items-center gap-3 text-white">
+              <AuthControls onOpenAuth={setAuthModal} onOpenSaved={openSavedTrips} />
+            </div>
           </header>
+        </div>
 
-          {/* ===================================================== */}
-          {/* MAIN TWO COLUMN LAYOUT */}
-          {/* ===================================================== */}
-
-          <div
-            className={`
-              grid items-start gap-8
-              ${
-                formMinimized
-                  ? "grid-cols-1"
-                  : "grid-cols-1 lg:grid-cols-12"
-              }
-            `}
-          >
-            {/* =================================================== */}
-            {/* LEFT FORM */}
-            {/* =================================================== */}
-
+        <div className="relative z-10 mx-auto w-full max-w-[1440px] flex-1 px-5 py-8 md:px-8 lg:px-12">
+          <div className={`grid items-start gap-10 ${formMinimized ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-12"}`}>
             {formMinimized && (
-  <button
-    onClick={() => setFormMinimized(false)}
-    className="flex w-fit items-center gap-2 rounded-xl border border-white/60 bg-white/70 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm backdrop-blur-md transition-all hover:bg-white"
-    data-print="hide"
-  >
-    ▸ Show input form
-  </button>
-)}
-<section
-  className={`relative rounded-2xl p-5 sm:p-7 lg:col-span-5 ${
-    formMinimized ? "hidden" : ""
-  }`}
-  style={{
-    backdropFilter: "blur(20px) saturate(190%)",
-    background: "rgba(255,255,255,0.24)",
-    border: "1px solid rgba(255,255,255,0.45)",
-    boxShadow:
-      "0 20px 50px rgba(0,0,0,.15), inset 0 1px 3px rgba(255,255,255,.35)",
-  }}
-  data-print="hide"
->
-  {/* TABS */}
-  <div className="mb-5 flex rounded-xl border border-white/50 bg-white/30 p-1">
-    <button
-      type="button"
-      onClick={() => setTab("single")}
-      className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-all ${
-        tab === "single"
-          ? "bg-white text-blue-900 shadow-sm"
-          : "text-slate-600 hover:text-slate-900"
-      }`}
-    >
-      Single Trip
-    </button>
-
-    <button
-      type="button"
-      onClick={() => setTab("batch")}
-      className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-all ${
-        tab === "batch"
-          ? "bg-white text-blue-900 shadow-sm"
-          : "text-slate-600 hover:text-slate-900"
-      }`}
-    >
-      Batch Upload
-    </button>
-  </div>
-
-  {/* SINGLE TRIP FORM */}
-  {tab === "single" && (
-    <div className="glass-input-wrapper">
-      <TripForm
-        onSubmit={handleCalculate}
-        loading={loading}
-        truckRates={truckRates}
-      />
-    </div>
-  )}
-
-  {/* BATCH UPLOAD */}
-  {tab === "batch" && (
-    <div className="glass-input-wrapper">
-      <BatchUpload
-        onResults={(rows) => setBatchResults(rows)}
-      />
-    </div>
-  )}
-</section>
-
-            {/* =================================================== */}
-            {/* RIGHT RESULTS */}
-            {/* =================================================== */}
+              <button
+                onClick={() => setFormMinimized(false)}
+                className="flex w-fit items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-slate-900/20 transition-all hover:-translate-y-0.5 hover:bg-slate-800"
+                data-print="hide"
+              >
+                ▸ Show input form
+              </button>
+            )}
 
             <section
-              className={
-                formMinimized
-                  ? "min-w-0"
-                  : "min-w-0 lg:col-span-7"
-              }
+              className={`relative rounded-3xl border border-slate-200 border-t-[5px] border-t-blue-600 bg-white p-5 shadow-xl shadow-slate-900/10 sm:p-7 lg:col-span-4 ${formMinimized ? "hidden" : ""}`}
+              data-print="hide"
             >
-              {/* ================================================= */}
-              {/* LOADING */}
-              {/* ================================================= */}
+              <div className="mb-6 flex rounded-2xl bg-slate-100 p-1.5 ring-1 ring-slate-200">
+                {(["single", "batch"] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setTab(t)}
+                    className={`flex-1 rounded-xl px-4 py-2.5 text-sm font-bold transition-all ${
+                      tab === t
+                        ? "bg-gradient-to-br from-blue-600 to-blue-700 text-white shadow-md shadow-blue-600/30"
+                        : "text-slate-500 hover:text-slate-900"
+                    }`}
+                  >
+                    {t === "single" ? "Single Trip" : "Batch Upload"}
+                  </button>
+                ))}
+              </div>
 
-              {tab === "single" && loading && (
-                <div className="flex min-h-[520px] flex-col items-center justify-center">
-                  <div className="mb-5 h-10 w-10 animate-spin rounded-full border-4 border-white/30 border-t-blue-700" />
-
-                  <p className="text-sm font-semibold text-slate-700">
-                    Fetching route, tolls, and fuel price…
-                  </p>
+              {tab === "single" && (
+                <div className="clean-input-wrapper">
+                  <TripForm onSubmit={handleCalculate} loading={loading} truckRates={truckRates} />
                 </div>
               )}
 
-              {/* ================================================= */}
-              {/* EMPTY STATE */}
-              {/* ================================================= */}
+              {tab === "batch" && (
+                <div className="clean-input-wrapper">
+                  <BatchUpload onResults={(rows) => setBatchResults(rows)} />
+                </div>
+              )}
+            </section>
 
-              {tab === "single" &&
-                !result &&
-                !loading &&
-                !error && (
-                  <div className="relative flex min-h-[520px] flex-col items-center justify-center overflow-hidden select-none">
-                    {/* Wind */}
+            <section className={formMinimized ? "min-w-0" : "min-w-0 lg:col-span-8 pl-4"}>
+              {tab === "single" && loading && (
+                <div className="flex min-h-[520px] flex-col items-center justify-center">
+                  <div className="mb-5 h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" />
+                  <p className="text-sm font-semibold text-slate-600">Fetching route, tolls, and fuel price…</p>
+                </div>
+              )}
 
-                    <div className="pointer-events-none absolute inset-0 overflow-hidden">
-                      <div className="wind-1 absolute left-[20%] top-[35%] h-[2px] w-14 rounded-full bg-slate-700/30" />
+              {tab === "single" && error && !loading && !result && !showSaved && (
+                <div role="alert" className="standard-card rounded-xl border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">
+                  <p>{error}</p>
+                  {suggestions.length > 0 && (
+                    <p className="mt-1 font-medium">Did you mean: {suggestions.join(", ")}?</p>
+                  )}
+                </div>
+              )}
 
-                      <div className="wind-2 absolute left-[16%] top-[48%] h-[2.5px] w-20 rounded-full bg-slate-800/25" />
-
-                      <div className="wind-3 absolute left-[24%] top-[58%] h-[2px] w-12 rounded-full bg-slate-700/30" />
-                    </div>
-
-                    <div className="relative flex w-full max-w-[560px] flex-col items-center justify-center">
-
-                     <div className="truck-bob relative z-10 flex w-full items-center justify-center">
-                        <Image
-                          src="/images/truck.png"
-                            alt="Freight truck"
-                            width={460}
-                            height={300}
-                            className="truck-image pointer-events-none w-[320px] object-contain sm:w-[410px] md:w-[460px]"
-                            priority
-                          />
-                        </div>
-
-                      {/* Road */}
-
-                      <div className="relative z-20 -mt-[58px] flex w-full max-w-[520px] flex-col items-center sm:-mt-[70px] md:-mt-[82px]">
-                        <div className="h-[2.5px] w-full rounded-full bg-slate-700/40" />
-
-                        <div className="mt-2 h-3 w-full overflow-hidden opacity-75">
-                          <div className="road-dashes flex min-w-[200%] gap-8 whitespace-nowrap">
-                            {Array.from({
-                              length: 12,
-                            }).map((_, index) => (
-                              <span
-                                key={index}
-                                className="inline-block h-[3px] w-12 rounded-full bg-slate-800/70"
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-10 text-center">
-                      <p className="price-heading text-xl font-extrabold text-slate-800">
-                        Ready to price your trip?
-                      </p>
-
-                      <p className="mt-1 text-sm font-medium text-slate-600">
-                        Enter your trip details to calculate
-                        the estimated freight cost.
-                      </p>
-                    </div>
+              {tab === "single" && !result && !loading && !error && !showSaved && (
+                <div className="flex flex-col pt-4">
+                  <div className="mb-6 self-start inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-4 py-1.5 text-xs font-semibold text-blue-700">
+                    <svg className="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                    Scientific Freight Pricing Standard
                   </div>
-                )}
 
-              {/* ================================================= */}
-              {/* BATCH RESULTS */}
-              {/* ================================================= */}
+                  <h2 className="price-heading text-[42px] leading-tight font-extrabold text-slate-900 tracking-tight max-w-3xl">
+                    Predictable Freight Pricing, Grounded in Real Costs
+                  </h2>
 
-              {tab === "batch" &&
-                batchResults.length > 0 && (
-                  <div className="glass-panel rounded-2xl p-5 sm:p-7">
-                    <BatchResultsTable
-                      results={batchResults}
-                      onShowProvenance={(r) =>
-                        setProvenanceResult(
-                          r as unknown as CalculateResponse
-                        )
-                      }
+                  <p className="mt-4 text-[17px] text-slate-600 max-w-2xl">
+                    Accurately estimate end-to-end commercial haulage expenses with real-time fuel prices, live route distances.
+                  </p>
+
+                  <div className="mt-8 w-full max-w-[850px] overflow-hidden rounded-2xl shadow-sm border border-slate-200 bg-white">
+                    <Image
+                      src="/images/image.png"
+                      alt="Commercial truck on highway"
+                      width={1200}
+                      height={800}
+                      className="w-full h-auto object-cover"
+                      unoptimized
                     />
                   </div>
-                )}
+                </div>
+              )}
 
-              {tab === "batch" &&
-                batchResults.length === 0 && (
-                  <div className="glass-panel flex min-h-[480px] items-center justify-center rounded-2xl p-10 text-center">
-                    <div>
-                      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/60 text-2xl shadow-sm">
-                        ↑
-                      </div>
+              {tab === "batch" && batchResults.length > 0 && (
+                <div className="standard-card rounded-2xl p-5 sm:p-7">
+                  <BatchResultsTable
+                    results={batchResults}
+                    onShowProvenance={(r) => setProvenanceResult(r as unknown as CalculateResponse)}
+                  />
+                </div>
+              )}
 
-                      <h2 className="price-heading text-lg font-bold text-slate-800">
-                        Upload your trip data
-                      </h2>
-
-                      <p className="mt-1 text-sm font-medium text-slate-600">
-                        Upload a CSV to calculate multiple
-                        trips at once.
-                      </p>
-                    </div>
+              {tab === "single" && showSaved && !result && !loading && (
+                <div className="space-y-4" data-print="hide">
+                  <button
+                    onClick={() => setActiveResultTab("breakdown")}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 transition-colors hover:text-slate-900"
+                  >
+                    ← Back
+                  </button>
+                  <div className="standard-card saved-zone rounded-3xl p-5 sm:p-7">
+                    <SavedTripsPanel onOpen={handleOpenSavedTrip} />
                   </div>
-                )}
+                </div>
+              )}
 
-              {/* ================================================= */}
-              {/* SINGLE RESULT */}
-              {/* ================================================= */}
+              {tab === "single" && result && !loading && (
+                <div className="space-y-5">
+                  <div className="flex gap-1.5 overflow-x-auto rounded-2xl bg-white p-1.5 shadow-md ring-1 ring-slate-200" data-print="hide">
+                    {resultTabs.map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setActiveResultTab(t)}
+                        className={`whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-bold transition-all ${
+                          activeResultTab === t
+                            ? "bg-gradient-to-br from-blue-600 to-blue-700 text-white shadow-md shadow-blue-600/30"
+                            : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                        }`}
+                      >
+                        {t === "route" ? "Route Map" : t === "configuration" ? "Configuration" : t === "saved" ? "Saved Trips" : "Cost Breakdown"}
+                      </button>
+                    ))}
+                  </div>
 
-              {tab === "single" &&
-                result &&
-                !loading && (
-                  <div className="space-y-5">
-                    {/* Result tabs */}
-
-                    <div
-                      className="flex gap-1 overflow-x-auto border-b border-white/30"
-                      data-print="hide"
-                    >
-                      {(
-                        [
-                          "configuration",
-                          "breakdown",
-                          "route",
-                        ] as const
-                      ).map((t) => (
-                        <button
-                          key={t}
-                          onClick={() =>
-                            setActiveResultTab(t)
-                          }
-                          className={`
-                            whitespace-nowrap px-4 py-2.5 text-sm
-                            font-semibold capitalize transition-all
-                            ${
-                              activeResultTab === t
-                                ? "border-b-2 border-blue-800 text-blue-900"
-                                : "text-slate-600 hover:text-slate-900"
-                            }
-                          `}
-                        >
-                          {t === "route"
-                            ? "Route Map"
-                            : t === "configuration"
-                            ? "Configuration"
-                            : "Cost Breakdown"}
-                        </button>
-                      ))}
+                  {showSaved && (
+                    <div className="standard-card saved-zone rounded-3xl p-5 sm:p-7" data-print="hide">
+                      <SavedTripsPanel onOpen={handleOpenSavedTrip} />
                     </div>
+                  )}
 
-                    {/* ================================================= */}
-                    {/* MAIN RESULT CARD */}
-                    {/* ================================================= */}
-
-                    <div className="glass-panel rounded-2xl p-5 sm:p-7" ref={reportRef}>
-                      {/* Header */}
-
-                      <div className="flex flex-col justify-between gap-4 border-b border-white/30 pb-5 sm:flex-row sm:items-center">
+                  <div className={`rounded-3xl bg-gradient-to-b from-slate-100 to-slate-200/70 p-4 ring-1 ring-slate-200 sm:p-5 ${showSaved ? "hidden" : ""}`} ref={reportRef}>
+                    <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-blue-900 to-blue-700 p-6 text-white shadow-xl shadow-blue-900/25">
+                      <div className="pointer-events-none absolute -right-16 -top-16 h-52 w-52 rounded-full bg-white/10 blur-2xl" />
+                      <div className="relative flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
                         <div>
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                            Total Estimated Cost
-                          </span>
-
-                          <div className="mt-1 flex items-baseline gap-2">
-                            <span className="price-heading text-3xl font-extrabold tracking-tight text-slate-950 sm:text-4xl">
+                          <span className="text-xs font-bold uppercase tracking-widest text-blue-200">Total Estimated Cost</span>
+                          <div className="mt-1.5 flex flex-wrap items-baseline gap-3">
+                            <span className="price-heading text-4xl font-extrabold tracking-tight sm:text-5xl">
                               {formatInr(result.total)}
                             </span>
-
-                            <span className="rounded-md border border-emerald-300 bg-emerald-100/90 px-2 py-0.5 text-xs font-bold text-emerald-900">
+                            <span className="rounded-full bg-emerald-400/20 px-3 py-1 text-xs font-bold text-emerald-300 ring-1 ring-emerald-300/40">
                               all inclusive
                             </span>
                           </div>
                         </div>
-
-                        <div className="rounded-xl border border-white/60 bg-white/50 px-3.5 py-2 text-left backdrop-blur-md sm:text-right">
-                          <span className="block text-xs font-semibold text-slate-700">
-                            Computed Route:
-                          </span>
-
-                          <span className="text-sm font-extrabold text-slate-950">
-                            {result.meta.origin.name}
-                            {" → "}
-                            {result.meta.destination.name}
-                            {" "}
-                            ({result.meta.distance_km} km)
+                        <div className="rounded-2xl bg-white/10 px-4 py-3 text-left ring-1 ring-white/20 backdrop-blur sm:text-right">
+                          <span className="block text-xs font-semibold text-blue-200">Computed Route</span>
+                          <span className="text-sm font-bold">
+                            {result.meta.origin.name} → {result.meta.destination.name} ({result.meta.distance_km} km)
                           </span>
                         </div>
                       </div>
-
-                      {/* Data sources */}
-
-                      <div
-                        className="mt-4 flex justify-end"
-                        data-print="hide"
-                      >
-                        {/* <button
-                          onClick={() =>
-                            setProvenanceResult(result)
-                          }
-                          className="rounded-xl border border-white/70 bg-white/70 px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm transition-all hover:bg-white"
-                        >
-                          View data sources →
-                        </button> */}
-                      </div>
-
-                      {/* ================================================= */}
-                      {/* BREAKDOWN TAB */}
-                      {/* ================================================= */}
-
-                      {activeResultTab === "breakdown" && (
-                        <div className="mt-4 space-y-5">
-                          {/* Allocation */}
-
-                          <div>
-                            <div className="mb-2 flex justify-between text-xs font-bold text-slate-800">
-                              <span>
-                                Cost Head Allocation
-                              </span>
-
-                              <span className="rounded border border-white/50 bg-white/70 px-2 py-0.5 text-blue-950">
-                                100% Modeled
-                              </span>
-                            </div>
-
-                            <div className="flex h-3.5 w-full overflow-hidden rounded-full border border-white/40 bg-black/15 p-0.5 shadow-inner">
-                              {result.breakdown.map(
-                                (row, index) => {
-                                  const total =
-                                    result.breakdown.reduce(
-                                      (sum, item) =>
-                                        sum +
-                                        item.amount_inr,
-                                      0
-                                    );
-
-                                  const percentage =
-                                    total > 0
-                                      ? (row.amount_inr /
-                                          total) *
-                                        100
-                                      : 0;
-
-                                  return (
-                                    <div
-                                      key={`${row.name}-${index}`}
-                                      className={`
-                                        h-full
-                                        ${
-                                          index === 0
-                                            ? "rounded-l-full"
-                                            : ""
-                                        }
-                                        ${
-                                          index ===
-                                          result.breakdown
-                                            .length -
-                                            1
-                                            ? "rounded-r-full"
-                                            : ""
-                                        }
-                                        ${
-                                          index % 4 === 0
-                                            ? "bg-blue-600"
-                                            : index % 4 ===
-                                              1
-                                            ? "bg-indigo-600"
-                                            : index % 4 ===
-                                              2
-                                            ? "bg-slate-500"
-                                            : "bg-emerald-600"
-                                        }
-                                      `}
-                                      style={{
-                                        width: `${percentage}%`,
-                                      }}
-                                      title={`${row.name}: ${percentage.toFixed(
-                                        1
-                                      )}%`}
-                                    />
-                                  );
-                                }
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Result meta */}
-
-                       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-  <div className="glass-card rounded-xl p-3">
-    <p className="text-[11px] font-bold uppercase text-slate-600">
-      Distance
-    </p>
-
-    <p className="mt-1 text-lg font-extrabold text-slate-900">
-      {result.meta.distance_km} km
-    </p>
-  </div>
-
-  <div className="glass-card rounded-xl p-3">
-    <p className="text-[11px] font-bold uppercase text-slate-600">
-      Diesel
-    </p>
-
-    <p className="mt-1 text-lg font-extrabold text-slate-900">
-      ₹{result.meta.fuel.price_inr}/L
-    </p>
-  </div>
-
-  {/* PTPK */}
-  <div className="glass-card rounded-xl p-3">
-    <p className="text-[11px] font-bold uppercase text-slate-600">
-      Price Per Ton Per Kilometer
-    </p>
-
-    <div className="mt-1 space-y-0.5">
-      <p className="text-sm font-extrabold text-slate-900">
-        Payload: ₹{result.ptpk.payload.toFixed(2)}
-      </p>
-
-      <p className="text-sm font-extrabold text-slate-900">
-        Capacity: ₹{result.ptpk.capacity.toFixed(2)}
-      </p>
-    </div>
-  </div>
-       {/* <div className="glass-card rounded-xl p-3">
-                              <p className="text-[11px] font-bold uppercase text-slate-600">
-                                Toll Plazas
-                              </p>
-
-                              <p className="mt-1 text-lg font-extrabold text-slate-900">
-                                {
-                                  result.meta.toll
-                                    .plazas
-                                }
-                              </p>
-                            </div> */}
-                                 
-                             {/* <div className="glass-card rounded-xl p-3">
-                              <p className="text-[11px] font-bold uppercase text-slate-600">
-                                Trip Duration
-                              </p>
-
-                              <p className="mt-1 text-lg font-extrabold text-slate-900">
-                                {result.meta.trip_days}{" "}
-                                day
-                                {result.meta.trip_days >
-                                1
-                                  ? "s"
-                                  : ""}
-                              </p>
-                            </div> */}
                     </div>
 
-                          {/* Export */}
-
-                      <div
-                            className="flex flex-wrap gap-2"
-                            data-print="hide"
-                          >
-                            <button
-                              onClick={handleDownloadExcel}
-                              className="rounded-xl border border-white/70 bg-white/75 px-4 py-2 text-xs font-bold text-slate-800 shadow-sm transition-all hover:bg-white"
+                    {activeResultTab === "breakdown" && (
+                      <div className="mt-6 space-y-5">
+                        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                          {kpis.map((k) => (
+                            <div
+                              key={k.label}
+                              className={`rounded-2xl border border-slate-200 border-l-4 p-4 shadow-md transition-all hover:-translate-y-0.5 hover:shadow-lg ${k.card}`}
                             >
-                              Download Excel
-                            </button>
-                            <button
-                              onClick={handleDownloadPdf}
-                              className="rounded-xl border border-white/70 bg-white/75 px-4 py-2 text-xs font-bold text-slate-800 shadow-sm transition-all hover:bg-white"
-                            >
-                              Download PDF
-                            </button>
-                          </div>
-
-                          {/* Toggles */}
-
-                          <div className="flex flex-wrap gap-5">
-                            <label
-                              className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700"
-                              data-print="hide"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={
-                                  showContribution
-                                }
-                                onChange={(e) =>
-                                  setShowContribution(
-                                    e.target.checked
-                                  )
-                                }
-                                className="h-4 w-4 rounded border-slate-300"
-                              />
-
-                              Show benchmark check
-                            </label>
-
-                            <label
-                              className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700"
-                              data-print="hide"
-                            >
-                              <input
-                                type="checkbox"
-                                checked={showChart}
-                                onChange={(e) =>
-                                  setShowChart(
-                                    e.target.checked
-                                  )
-                                }
-                                className="h-4 w-4 rounded border-slate-300"
-                              />
-
-                              Show cost breakdown chart
-                            </label>
-                          </div>
-
-                          {showChart && (
-                            <div className="glass-card rounded-xl p-4">
-                              <BreakdownChart
-                                data={result.breakdown.map(
-                                  (r) => ({
-                                    name: r.name.replace(
-                                      / \\(.+\\)/,
-                                      ""
-                                    ),
-                                    amount:
-                                      r.amount_inr,
-                                  })
-                                )}
-                              />
+                              <p className={`text-[11px] font-bold uppercase tracking-wide ${k.text}`}>{k.label}</p>
+                              <p className="mt-1.5 text-xl font-extrabold text-slate-900">{k.value}</p>
                             </div>
-                          )}
+                          ))}
+                        </div>
 
-                          {/* Detailed table */}
+                        <div className="flex flex-wrap gap-2 pt-2" data-print="hide">
+                          <button
+                            onClick={handleDownloadExcel}
+                            className="rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-emerald-600/25 transition-all hover:-translate-y-0.5 hover:bg-emerald-700"
+                          >
+                            Download Excel
+                          </button>
+                          <button
+                            onClick={handleDownloadPdf}
+                            className="rounded-xl bg-rose-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-rose-600/25 transition-all hover:-translate-y-0.5 hover:bg-rose-700"
+                          >
+                            Download PDF
+                          </button>
+                        </div>
 
-                          <div className="glass-card overflow-hidden rounded-xl p-3 sm:p-4">
-                            <CostBreakdownTable
-                              rows={result.breakdown}
-                              contributions={
-                                result.contributions
-                              }
-                              showContribution={
-                                showContribution
-                              }
-                            />
+                        <div className="flex flex-wrap gap-5">
+                          <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700" data-print="hide">
+                            <input type="checkbox" checked={showContribution} onChange={(e) => setShowContribution(e.target.checked)} className="h-4 w-4 rounded border-slate-300" /> Show benchmark check
+                          </label>
+                          <label className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700" data-print="hide">
+                            <input type="checkbox" checked={showChart} onChange={(e) => setShowChart(e.target.checked)} className="h-4 w-4 rounded border-slate-300" /> Show cost breakdown chart
+                          </label>
+                        </div>
+
+                        {showChart && (
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-md">
+                            <BreakdownChart data={result.breakdown.map((r) => ({ name: r.name.replace(/ \(.+\)/, ""), amount: r.amount_inr }))} />
                           </div>
+                        )}
+
+                        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-md">
+                          <CostBreakdownTable rows={result.breakdown} contributions={result.contributions} showContribution={showContribution} />
                         </div>
-                      )}
-
-                      {/* ================================================= */}
-                      {/* CONFIGURATION */}
-                      {/* ================================================= */}
-
-                      {activeResultTab ===
-                        "configuration" && (
-                        <div className="mt-5 glass-card rounded-xl p-4">
-                          <ConfigurationTab
-                            truckId={
-                              result.meta.truck
-                                ?.truck_id ?? ""
-                            }
-                            modelId={
-                              result.meta.truck?.model_id
-                            }
-                            overrides={configOverrides}
-                            excludedHeads={
-                              excludedHeads
-                            }
-                            onChange={(
-                              nextOverrides,
-                              nextExcluded
-                            ) => {
-                              setConfigOverrides(
-                                nextOverrides
-                              );
-
-                              setExcludedHeads(
-                                nextExcluded
-                              );
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      {/* ================================================= */}
-                      {/* ROUTE MAP */}
-                      {/* ================================================= */}
-
-                      {activeResultTab === "route" && (
-                        <div className="mt-5 overflow-hidden rounded-xl border border-white/60 bg-white/40 p-2 backdrop-blur-md">
-                          <RouteMap
-                            origin={result.meta.origin}
-                            destination={
-                              result.meta.destination
-                            }
-                          />
-                        </div>
-                      )}
-
-                      {/* Bottom actions */}
-
-                      <div
-                        className="mt-6 flex items-center justify-between border-t border-white/30 pt-4"
-                        data-print="hide"
-                      >
-                        <button
-                          onClick={() => {
-                            setResult(null);
-                            setFormMinimized(false);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-bold text-slate-700 transition-colors hover:text-slate-950"
-                        >
-                          ← Clear breakdown
-                        </button>
-
-                        {/* <button
-                          onClick={downloadMethodology}
-                          className="rounded-xl border border-white/70 bg-white/75 px-4 py-2 text-xs font-bold text-blue-950 shadow-md transition-all hover:bg-white"
-                        >
-                          Export rate summary
-                        </button> */}
                       </div>
+                    )}
+
+                    {activeResultTab === "configuration" && (
+                      <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-md">
+                        <ConfigurationTab
+                          truckId={result.meta.truck?.truck_id ?? ""}
+                          modelId={result.meta.truck?.model_id}
+                          overrides={configOverrides}
+                          excludedHeads={excludedHeads}
+                          onChange={(nextOverrides, nextExcluded) => {
+                            setConfigOverrides(nextOverrides);
+                            setExcludedHeads(nextExcluded);
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {activeResultTab === "route" && (
+                      <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-md">
+                        <RouteMap origin={result.meta.origin} destination={result.meta.destination} />
+                      </div>
+                    )}
+
+                    <div className="mt-6 flex items-center justify-between border-t border-slate-300 pt-5" data-print="hide">
+                      <button
+                        onClick={() => {
+                          setResult(null);
+                          setFormMinimized(false);
+                        }}
+                        className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 transition-colors hover:text-slate-900"
+                      >
+                        ← Clear breakdown
+                      </button>
+                      {!user && authReady && (
+                        <div className="flex flex-wrap items-center justify-end gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2">
+                          <span className="text-xs font-semibold text-slate-700">Log in or sign up to save this trip</span>
+                          <button
+                            onClick={() => setAuthModal("login")}
+                            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm transition-all hover:bg-blue-700"
+                          >
+                            Log in
+                          </button>
+                          <button
+                            onClick={() => setAuthModal("signup")}
+                            className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-bold text-blue-700 transition-all hover:bg-blue-100"
+                          >
+                            Sign up
+                          </button>
+                        </div>
+                      )}
+                      {user &&
+                        (isCurrentTripSaved ? (
+                          <span className="rounded-xl border border-emerald-300 bg-emerald-100 px-4 py-2 text-xs font-bold text-emerald-800 shadow-sm">
+                            ✓ Saved to your trips
+                          </span>
+                        ) : (
+                          <SaveTripControl
+                            defaultName={`${result.meta.origin.name} → ${result.meta.destination.name}`}
+                            onSave={handleSaveTrip}
+                          />
+                        ))}
                     </div>
                   </div>
-                )}
+                </div>
+              )}
             </section>
           </div>
         </div>
 
-        {/* ========================================================= */}
-        {/* PROVENANCE DRAWER */}
-        {/* ========================================================= */}
+        <ProvenanceDrawer open={provenanceResult !== null} onClose={() => setProvenanceResult(null)} result={provenanceResult} />
+        <AuthModal mode={authModal} onModeChange={setAuthModal} onClose={() => setAuthModal(null)} />
+        <ReportEmailModal open={emailModalOpen} report={pendingReport} onClose={() => setEmailModalOpen(false)} />
 
-        <ProvenanceDrawer
-          open={provenanceResult !== null}
-          onClose={() => setProvenanceResult(null)}
-          result={provenanceResult}
-        />
-
-        <ReportEmailModal
-          open={emailModalOpen}
-          report={pendingReport}
-          onClose={() => setEmailModalOpen(false)}
-        />
-    
-    <footer className="mt-12 border-t border-black/10 py-6">
-  <div className="mx-auto flex max-w-7xl flex-col items-center justify-center gap-2 px-6 text-center">
-    <p className="text-sm font-medium text-slate-700">
-      © {new Date().getFullYear()} PriceMyTrip
-    </p>
-
-    <p className="text-xs text-slate-600">
-      All rights reserved
-      <span className="mx-2 text-slate-400">•</span>
-      Technical Partner:
-      <span className="ml-1 font-semibold text-slate-700">
-        Kodax Technologies
-      </span>
-    </p>
-  </div>
-</footer>
+        <footer className="mt-auto bg-slate-950 py-8">
+          <div className="mx-auto flex max-w-7xl flex-col items-center justify-center gap-2 px-6 text-center">
+            <p className="text-sm font-medium text-slate-300">© {new Date().getFullYear()} PriceMyTrip</p>
+            <p className="text-xs text-slate-500">
+              All rights reserved
+              <span className="mx-2 text-slate-700">•</span>
+              Technical Partner:
+              <span className="ml-1 font-semibold text-blue-300">Kodax Technologies</span>
+            </p>
+          </div>
+        </footer>
       </main>
     </>
   );

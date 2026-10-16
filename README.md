@@ -26,6 +26,25 @@ include/exclude per cost head, truck-data reference table), **Cost
 Breakdown** (calculated result, live-recomputed as Configuration changes),
 and **Route Map** (placeholder — see Roadmap).
 
+## Accounts and saved trips
+
+The calculator works for everyone without logging in. Logged-in users also get
+a **Save trip** button on the result card and a **Saved Trips** tab with their
+saved trips as cards (open a card to recalculate it, or delete it).
+
+Setup: create a MySQL database, then set the `MYSQL_*` variables and
+`AUTH_SECRET` in `.env.local` (see `.env.example`). The `users` and `trips`
+tables are created automatically on first use; `db/schema.sql` has the same
+statements if you prefer to run them in phpMyAdmin. Sessions are signed JWTs in an httpOnly cookie, passwords are
+hashed with bcrypt, and each user can only read or delete their own trips.
+
+| Route | Purpose |
+|-------|---------|
+| `POST /api/auth/signup` / `login` / `logout` | Account + session |
+| `GET /api/auth/me` | Current user or `null` |
+| `GET` / `POST /api/trips` | List / save the current user's trips |
+| `DELETE /api/trips/:id` | Delete one of the current user's trips |
+
 ## Configuration
 
 | File | Purpose |
